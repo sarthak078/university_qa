@@ -386,3 +386,84 @@ Keep it concise, engaging, and easy to read. Aim for 150-200 words.`
 
   return generatedText
 }
+export async function generateQuestionAnswer(questionId: string) {
+  console.log("[v0] Starting generateQuestionAnswer for:", questionId)
+
+  const supabase = await createClient()
+
+  const { data: question } = await supabase
+    .from("questions")
+    .select("*, universities(name, description, ai_summary)")
+    .eq("id", questionId)
+    .single()
+
+  if (!question) {
+    console.log("[v0] Question not found")
+    throw new Error("Question not found")
+  }
+
+  console.log("[v0] Found question:", question.title)
+
+  const universityContext = question.universities
+    ? `University: ${question.universities.name}
+Description: ${question.universities.description}
+${question.universities.ai_summary ? `Additional context: ${question.universities.ai_summary}` : ""}`
+    : ""
+
+  const prompt = `You are a helpful university admissions advisor. Answer the following question about a university:
+
+${universityContext}
+
+Question: ${question.title}
+Details: ${question.content}
+
+Provide a helpful, accurate, and informative answer. Be specific and cite relevant information when possible. Keep the answer concise but comprehensive (around 150-250 words).`
+
+  try {
+    console.log("[v0] Calling HuggingFace API for answer...")
+
+    const response = await hf.chatCompletion({
+      model: "meta-llama/Llama-3.2-3B-Instruct",
+      messages: [
+        {
+          role: "user",
+          content: prompt,
+        },
+      ],
+      max_tokens: 600,
+      temperature: 0.7,
+    })
+
+    console.log("[v0] HuggingFace answer response received")
+
+    const generatedText = response.choices[0]?.message?.content
+
+    if (!generatedText) {
+      console.log("[v0] No content generated from AI model")
+      throw new Error("No content generated from AI model")
+    }
+
+    console.log("[v0] Generated answer length:", generatedText.length)
+
+    const { error: updateError } = await supabase
+      .from("questions")
+      .update({ ai_answer: generatedText })
+      .eq("id", questionId)
+
+    if (updateError) {
+      console.log("[v0] Database update error:", updateError)
+      throw updateError
+    }
+
+    console.log("[v0] Successfully updated question with AI answer")
+
+    revalidatePath(`/question/${questionId}`)
+
+    return generatedText
+  } catch (error) {
+    console.error("[v0] Error generating answer:", error)
+    console.error("[v0] Error details:", JSON.stringify(error, null, 2))
+    throw error
+  }
+}
+
